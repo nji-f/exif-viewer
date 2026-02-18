@@ -123,11 +123,6 @@ const styles = {
   gridInfo: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' },
   infoItem: { display: 'flex', alignItems: 'center', gap: '15px', padding: '15px', background: '#1e293b', borderRadius: '12px' },
   infoLabel: { fontSize: '11px', color: '#94a3b8', textTransform: 'uppercase' },
-  infoValue: { fontSize: '        {preview && <img src={preview} style={{width:'300px', borderRadius:'10px'}} />}
-        <div style={{flex:1, background:'#f4f4f4', padding:'15px', borderRadius:'10px', overflow:'auto', maxHeight:'400px'}}>
-          <pre>{JSON.stringify(metadata, null, 2)}</pre>
-        </div>
-      </div>
-    </div>
-  );
-}
+  infoValue: { fontSize: '14px', fontWeight: '500', marginTop: '2px' },
+  emptyState: { textAlign: 'center', color: '#475569', marginTop: '100px' }
+};
