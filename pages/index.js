@@ -1,249 +1,245 @@
 import { useSession, signIn, signOut } from "next-auth/react";
-import { useState, useEffect } from "react";
+import { useState, useRef, useEffect } from "react";
 import exifr from 'exifr';
 
-export default function Home() {
+export default function ExifViewer() {
   const { data: session } = useSession();
   const [metadata, setMetadata] = useState(null);
-  const [fileInfo, setFileInfo] = useState(null);
   const [preview, setPreview] = useState(null);
-  const [ip, setIp] = useState("Scanning...");
-  const [activeTab, setActiveTab] = useState('analysis');
-  const [loading, setLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState('overview');
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [location, setLocation] = useState("");
+  const [hash, setHash] = useState({ md5: '', sha256: '' });
+  const canvasRef = useRef(null);
 
-  useEffect(() => {
-    fetch('https://api.ipify.org?format=json')
-      .then(res => res.json())
-      .then(data => setIp(data.ip))
-      .catch(() => setIp("Offline"));
-  }, []);
+  // Fitur Baru: Menghitung Hash File (Digital Fingerprint)
+  const generateHash = async (file) => {
+    const buffer = await file.arrayBuffer();
+    const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    setHash(prev => ({ ...prev, sha256: hashHex }));
+  };
 
-  const handleImage = async (e) => {
+  const handleUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
-    setLoading(true);
+    setIsProcessing(true);
     setPreview(URL.createObjectURL(file));
-    setFileInfo({
-      name: file.name,
-      size: (file.size / 1024).toFixed(2) + " KB",
-      type: file.type
-    });
+    generateHash(file);
 
     try {
-      const data = await exifr.parse(file, {
-        tiff: true, xmp: true, icc: true, jfif: true, gps: true
-      });
-      setMetadata(data || { error: "No EXIF data detected." });
+      const data = await exifr.parse(file, { tiff: true, xmp: true, gps: true, jfif: true });
+      setMetadata(data);
+      
+      if (data?.latitude) {
+        const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${data.latitude}&lon=${data.longitude}`);
+        const geo = await res.json();
+        setLocation(geo.display_name);
+      }
+      
+      renderELA(file);
     } catch (err) {
-      setMetadata({ error: "Failed to parse metadata." });
+      setMetadata({ error: "Invalid Metadata" });
     } finally {
-      setLoading(false);
+      setTimeout(() => setIsProcessing(false), 800);
     }
   };
 
-  const getRiskScore = () => {
-    if (!metadata || metadata.error) return { label: "HIGH RISK", color: "#ef4444", text: "Metadata stripped / possible manipulation." };
-    if (!metadata.Make && !metadata.Software) return { label: "MEDIUM", color: "#f59e0b", text: "Limited hardware data found." };
-    return { label: "LOW RISK", color: "#22c55e", text: "Authentic hardware signature detected." };
+  const renderELA = (file) => {
+    const reader = new FileReader();
+    reader.onload = (f) => {
+      const img = new Image();
+      img.onload = () => {
+        const ctx = canvasRef.current.getContext('2d');
+        canvasRef.current.width = img.width;
+        canvasRef.current.height = img.height;
+        ctx.drawImage(img, 0, 0);
+        ctx.globalCompositeOperation = 'difference';
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+        ctx.fillRect(0, 0, img.width, img.height);
+      };
+      img.src = f.target.result;
+    };
+    reader.readAsDataURL(file);
   };
 
-  if (!session) return (
-    <div style={styles.loginPage}>
-      <div style={styles.loginCard}>
-        <div style={styles.glitchBox}>
-          <h1 style={styles.heroTitle}>IMAGER<span style={{color: '#3b82f6'}}>X</span></h1>
-        </div>
-        <p style={styles.heroSub}>Digital Intelligence & Forensic Image Analysis</p>
-        <button style={styles.primaryBtn} onClick={() => signIn('google')}>
-          AUTHENTICATE SYSTEM
-        </button>
-      </div>
-    </div>
-  );
+  if (!session) return <LoginScreen onLogin={() => signIn('google')} />;
 
   return (
-    <div style={styles.appContainer}>
-      {/* HEADER */}
-      <nav style={styles.nav}>
-        <div style={styles.logoGroup}>
-          <span style={styles.logo}>IMAGERX</span>
-          <span style={styles.badge}>v2.0 PRO</span>
+    <div style={styles.app}>
+      {/* SIDEBAR NAVIGATION */}
+      <aside style={styles.sidebar}>
+        <div style={styles.brand}>exif<span style={{color:'#6366f1'}}>-viewer</span></div>
+        
+        <div style={styles.uploadSection}>
+          <label style={styles.dropzone}>
+            <input type="file" hidden onChange={handleUpload} />
+            <span style={{fontSize: '20px'}}>{isProcessing ? '⏳' : '⊕'}</span>
+            <p style={styles.dropText}>{isProcessing ? 'ANALYZING' : 'UPLOAD IMAGE'}</p>
+          </label>
         </div>
-        <div style={styles.navActions}>
-          <div style={styles.ipBadge}>
-            <span style={styles.dot}></span> TERMINAL: {ip}
+
+        <nav style={styles.nav}>
+          <NavTab id="overview" label="Overview" active={activeTab} set={setActiveTab} />
+          <NavTab id="geo" label="Geolocation" active={activeTab} set={setActiveTab} />
+          <NavTab id="forensics" label="Forensics" active={activeTab} set={setActiveTab} />
+          <NavTab id="raw" label="Raw Data" active={activeTab} set={setActiveTab} />
+        </nav>
+
+        <div style={styles.sidebarFooter}>
+          <div style={styles.userBox}>
+            <div style={styles.userAvatar}>{session.user.name[0]}</div>
+            <div style={styles.userInfo}>
+              <div style={styles.userName}>{session.user.name}</div>
+              <button onClick={() => signOut()} style={styles.logoutBtn}>Logout</button>
+            </div>
           </div>
-          <button style={styles.logOut} onClick={() => signOut()}>DISCONNECT</button>
         </div>
-      </nav>
+      </aside>
 
-      <div style={styles.layout}>
-        {/* SIDEBAR: INPUT & PREVIEW */}
-        <aside style={styles.sidebar}>
-          <div style={styles.glassCard}>
-            <h4 style={styles.cardTitle}>DATA INJECTION</h4>
-            <label style={styles.uploadBox}>
-              <input type="file" style={{display:'none'}} onChange={handleImage} accept="image/*" />
-              <span style={{fontSize: '24px'}}>📂</span>
-              <p style={{fontSize: '11px', marginTop: '10px'}}>DRAG OR CLICK TO UPLOAD</p>
-            </label>
+      {/* MAIN CONTENT AREA */}
+      <main style={styles.main}>
+        {!preview ? (
+          <div style={styles.emptyState}>
+            <h2>Ready for investigation</h2>
+            <p>Upload a JPG/TIFF file to extract hidden intelligence.</p>
+          </div>
+        ) : (
+          <div style={styles.workspace}>
+            <header style={styles.header}>
+              <h1>Analysis Report</h1>
+              <div style={styles.headerActions}>
+                <button onClick={() => window.print()} style={styles.secondaryBtn}>Export PDF</button>
+              </div>
+            </header>
 
-            {preview && (
-              <div style={styles.previewContainer}>
-                <img src={preview} style={styles.previewImg} alt="Evidence" />
-                <div style={styles.fileBrief}>
-                  <p><strong>FILE:</strong> {fileInfo?.name}</p>
-                  <p><strong>SIZE:</strong> {fileInfo?.size}</p>
+            <div style={styles.grid}>
+              {/* LEFT: VISUALS */}
+              <div style={styles.visualCol}>
+                <div style={styles.card}>
+                  <img src={preview} style={styles.mainPreview} alt="Target" />
+                </div>
+                <div style={styles.card}>
+                  <h3 style={styles.cardTitle}>Digital Fingerprint</h3>
+                  <div style={styles.hashBox}>
+                    <label>SHA-256</label>
+                    <code>{hash.sha256 || 'Calculating...'}</code>
+                  </div>
                 </div>
               </div>
-            )}
-          </div>
 
-          {metadata && !metadata.error && (
-            <div style={styles.glassCard}>
-              <h4 style={styles.cardTitle}>EXPORT EVIDENCE</h4>
-              <button onClick={() => window.print()} style={styles.actionBtn}>Print Full Report</button>
-              <a 
-                href={`https://www.google.com/searchbyimage?image_url=${preview}`} 
-                target="_blank" 
-                style={{...styles.actionBtn, textDecoration: 'none', display: 'block', textAlign: 'center'}}
-              >
-                Reverse Image Search
-              </a>
-            </div>
-          )}
-        </aside>
-
-        {/* MAIN PANEL */}
-        <main style={styles.mainContent}>
-          <div style={styles.tabContainer}>
-            <button onClick={() => setActiveTab('analysis')} style={activeTab === 'analysis' ? styles.tabActive : styles.tab}>Forensic Analysis</button>
-            <button onClick={() => setActiveTab('camera')} style={activeTab === 'camera' ? styles.tabActive : styles.tab}>Optics</button>
-            <button onClick={() => setActiveTab('raw')} style={activeTab === 'raw' ? styles.tabActive : styles.tab}>Metadata Log</button>
-          </div>
-
-          <div style={styles.displayArea}>
-            {!metadata ? (
-              <div style={styles.emptyState}>
-                <div style={styles.pulse}></div>
-                AWAITING ENCRYPTED DATA INPUT...
-              </div>
-            ) : (
-              <div className="fade-in">
-                {activeTab === 'analysis' && (
-                  <div style={styles.analysisGrid}>
-                    {/* Security Score */}
-                    <div style={{...styles.riskCard, borderColor: getRiskScore().color}}>
-                      <p style={{fontSize: '10px', color: '#94a3b8'}}>INTEGRITY SCORE</p>
-                      <h2 style={{color: getRiskScore().color, margin: '5px 0'}}>{getRiskScore().label}</h2>
-                      <p style={{fontSize: '12px'}}>{getRiskScore().text}</p>
+              {/* RIGHT: DATA */}
+              <div style={styles.dataCol}>
+                <div style={styles.card}>
+                  {activeTab === 'overview' && (
+                    <div className="fade-in">
+                      <h3 style={styles.cardTitle}>Device Information</h3>
+                      <StatRow label="Camera" value={metadata?.Make} />
+                      <StatRow label="Model" value={metadata?.Model} />
+                      <StatRow label="Software" value={metadata?.Software} />
+                      <StatRow label="Date Taken" value={metadata?.DateTimeOriginal?.toLocaleString()} />
                     </div>
+                  )}
 
-                    <div style={styles.infoGrid}>
-                      <StatCard label="DEVICE MAKE" value={metadata.Make} />
-                      <StatCard label="DEVICE MODEL" value={metadata.Model} />
-                      <StatCard label="SOFTWARE" value={metadata.Software} />
-                      <StatCard label="TIMESTAMP" value={metadata.DateTimeOriginal?.toLocaleString()} />
-                    </div>
-
-                    {metadata.latitude && (
-                      <div style={styles.mapContainer}>
-                        <p style={styles.cardTitle}>GPS COORDINATES DETECTED</p>
-                        <p style={{fontSize: '12px', color: '#22c55e', marginBottom: '10px'}}>
-                          LOC: {metadata.latitude.toFixed(4)}, {metadata.longitude.toFixed(4)}
-                        </p>
+                  {activeTab === 'geo' && (
+                    <div className="fade-in">
+                      <h3 style={styles.cardTitle}>Location Mapping</h3>
+                      <StatRow label="Coordinates" value={metadata?.latitude ? `${metadata.latitude}, ${metadata.longitude}` : "N/A"} />
+                      <div style={styles.addressBox}>
+                        <p style={styles.label}>Resolved Address:</p>
+                        <p style={styles.addressText}>{location || "No GPS data found"}</p>
+                      </div>
+                      {metadata?.latitude && (
                         <iframe 
-                          width="100%" height="200" style={{borderRadius: '8px', border: 'none'}}
+                          width="100%" height="250" style={styles.mapFrame}
                           src={`https://maps.google.com/maps?q=${metadata.latitude},${metadata.longitude}&z=14&output=embed`}>
                         </iframe>
-                      </div>
-                    )}
-                  </div>
-                )}
+                      )}
+                    </div>
+                  )}
 
-                {activeTab === 'camera' && (
-                  <div style={styles.infoGrid}>
-                    <StatCard label="EXPOSURE" value={metadata.ExposureTime ? `1/${Math.round(1/metadata.ExposureTime)}s` : null} />
-                    <StatCard label="ISO SPEED" value={metadata.ISO} />
-                    <StatCard label="APERTURE" value={metadata.FNumber ? `f/${metadata.FNumber}` : null} />
-                    <StatCard label="FOCAL LENGTH" value={metadata.FocalLength ? `${metadata.FocalLength}mm` : null} />
-                    <StatCard label="LENS MODEL" value={metadata.LensModel} />
-                    <StatCard label="WHITE BALANCE" value={metadata.WhiteBalance} />
-                  </div>
-                )}
+                  {activeTab === 'forensics' && (
+                    <div className="fade-in">
+                      <h3 style={styles.cardTitle}>Manipulation Analysis (ELA)</h3>
+                      <canvas ref={canvasRef} style={styles.elaCanvas}></canvas>
+                      <p style={styles.hint}>High-contrast areas might indicate localized editing.</p>
+                    </div>
+                  )}
 
-                {activeTab === 'raw' && (
-                  <pre style={styles.rawOutput}>{JSON.stringify(metadata, null, 2)}</pre>
-                )}
+                  {activeTab === 'raw' && (
+                    <pre style={styles.rawJson}>{JSON.stringify(metadata, null, 2)}</pre>
+                  )}
+                </div>
               </div>
-            )}
+            </div>
           </div>
-        </main>
-      </div>
+        )}
+      </main>
     </div>
   );
 }
 
-function StatCard({ label, value }) {
-  return (
-    <div style={styles.statCard}>
-      <div style={styles.statLabel}>{label}</div>
-      <div style={styles.statValue}>{value || "NOT DETECTED"}</div>
+// Helper Components
+const NavTab = ({ id, label, active, set }) => (
+  <button 
+    onClick={() => set(id)} 
+    style={{...styles.navTab, background: active === id ? '#1f1f23' : 'transparent', color: active === id ? '#fff' : '#a1a1aa'}}
+  >
+    {label}
+  </button>
+);
+
+const StatRow = ({ label, value }) => (
+  <div style={styles.statRow}>
+    <span style={styles.label}>{label}</span>
+    <span style={styles.value}>{value || "—"}</span>
+  </div>
+);
+
+const LoginScreen = ({ onLogin }) => (
+  <div style={styles.loginContainer}>
+    <div style={styles.loginCard}>
+      <h1 style={{marginBottom: '10px'}}>exif-viewer</h1>
+      <p style={{color: '#a1a1aa', marginBottom: '30px'}}>Advanced Image Metadata Forensics</p>
+      <button onClick={onLogin} style={styles.primaryBtn}>Sign in with Google</button>
     </div>
-  );
-}
+  </div>
+);
 
 const styles = {
-  // --- Layout & Global ---
-  appContainer: { minHeight: '100vh', background: '#020617', color: '#f8fafc', fontFamily: '"JetBrains Mono", monospace' },
-  nav: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '15px 30px', background: 'rgba(15, 23, 42, 0.8)', backdropFilter: 'blur(10px)', borderBottom: '1px solid #1e293b', position: 'sticky', top: 0, zIndex: 100 },
-  layout: { display: 'grid', gridTemplateColumns: '320px 1fr', gap: '25px', padding: '25px', maxWidth: '1600px', margin: '0 auto' },
-  
-  // --- Components ---
-  glassCard: { background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', padding: '20px', marginBottom: '20px' },
-  cardTitle: { fontSize: '11px', color: '#64748b', letterSpacing: '2px', marginBottom: '15px', fontWeight: 'bold' },
-  
-  logoGroup: { display: 'flex', alignItems: 'center', gap: '10px' },
-  logo: { fontWeight: '900', fontSize: '1.4rem', letterSpacing: '1px' },
-  badge: { background: '#3b82f6', color: '#fff', fontSize: '10px', padding: '2px 6px', borderRadius: '4px' },
-  
-  ipBadge: { background: '#020617', padding: '6px 12px', borderRadius: '20px', fontSize: '11px', border: '1px solid #334155', color: '#22c55e', display: 'flex', alignItems: 'center', gap: '8px' },
-  dot: { width: '6px', height: '6px', background: '#22c55e', borderRadius: '50%', boxShadow: '0 0 8px #22c55e' },
-  
-  uploadBox: { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', border: '2px dashed #1e293b', borderRadius: '12px', height: '120px', cursor: 'pointer', transition: 'all 0.3s ease', ':hover': { borderColor: '#3b82f6'} },
-  
-  previewContainer: { marginTop: '20px' },
-  previewImg: { width: '100%', borderRadius: '8px', border: '1px solid #334155', objectFit: 'cover', height: '180px' },
-  fileBrief: { marginTop: '10px', fontSize: '10px', color: '#94a3b8', lineHeight: '1.6' },
-
-  mainContent: { display: 'flex', flexDirection: 'column', gap: '20px' },
-  tabContainer: { display: 'flex', gap: '10px' },
-  tab: { background: 'transparent', color: '#64748b', border: '1px solid #1e293b', padding: '10px 20px', borderRadius: '8px', cursor: 'pointer', transition: '0.2s' },
-  tabActive: { background: '#3b82f6', color: '#fff', border: '1px solid #3b82f6', padding: '10px 20px', borderRadius: '8px', cursor: 'pointer' },
-  
-  displayArea: { minHeight: '600px' },
-  analysisGrid: { display: 'flex', flexDirection: 'column', gap: '20px' },
-  infoGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '15px' },
-  
-  statCard: { background: '#0f172a', padding: '15px', borderRadius: '10px', border: '1px solid #1e293b' },
-  statLabel: { fontSize: '10px', color: '#64748b', marginBottom: '5px', textTransform: 'uppercase' },
-  statValue: { fontSize: '13px', fontWeight: 'bold', color: '#f1f5f9' },
-
-  riskCard: { padding: '20px', borderRadius: '12px', background: 'rgba(15, 23, 42, 0.5)', borderLeft: '6px solid' },
-  
-  rawOutput: { background: '#020617', padding: '20px', borderRadius: '12px', color: '#22c55e', overflowX: 'auto', fontSize: '12px', border: '1px solid #1e293b' },
-  
-  emptyState: { height: '400px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#475569', letterSpacing: '3px', fontSize: '12px' },
-  pulse: { width: '15px', height: '15px', background: '#3b82f6', borderRadius: '50%', marginBottom: '20px', animation: 'pulse 2s infinite' },
-
-  actionBtn: { width: '100%', padding: '10px', background: '#1e293b', border: '1px solid #334155', color: '#fff', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', marginTop: '10px' },
-
-  // --- Login Page ---
-  loginPage: { height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#020617' },
-  loginCard: { textAlign: 'center', padding: '40px', background: '#0f172a', borderRadius: '24px', border: '1px solid #1e293b', boxShadow: '0 20px 50px rgba(0,0,0,0.5)' },
-  heroTitle: { fontSize: '3.5rem', fontWeight: '900', margin: 0, letterSpacing: '-2px' },
-  heroSub: { color: '#64748b', marginBottom: '30px', fontSize: '14px' },
-  primaryBtn: { background: '#3b82f6', color: '#fff', border: 'none', padding: '16px 32px', borderRadius: '12px', cursor: 'pointer', fontWeight: 'bold', letterSpacing: '1px' },
-  logOut: { background: 'transparent', border: '1px solid #ef4444', color: '#ef4444', padding: '5px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '11px' }
+  app: { display: 'flex', height: '100vh', background: '#09090b', color: '#fafafa', fontFamily: '"Inter", system-ui, sans-serif' },
+  sidebar: { width: '280px', borderRight: '1px solid #27272a', padding: '24px', display: 'flex', flexDirection: 'column' },
+  brand: { fontSize: '20px', fontWeight: '700', letterSpacing: '-0.5px', marginBottom: '40px' },
+  uploadSection: { marginBottom: '32px' },
+  dropzone: { display: 'flex', alignItems: 'center', gap: '12px', background: '#18181b', padding: '12px 16px', borderRadius: '8px', border: '1px solid #27272a', cursor: 'pointer' },
+  dropText: { fontSize: '13px', fontWeight: '500' },
+  nav: { display: 'flex', flexDirection: 'column', gap: '4px', flex: 1 },
+  navTab: { textAlign: 'left', padding: '10px 12px', borderRadius: '6px', border: 'none', cursor: 'pointer', fontSize: '14px', transition: '0.2s' },
+  main: { flex: 1, overflowY: 'auto', background: '#09090b' },
+  workspace: { padding: '40px', maxWidth: '1200px', margin: '0 auto' },
+  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' },
+  grid: { display: 'grid', gridTemplateColumns: '1fr 1.2fr', gap: '32px' },
+  card: { background: '#09090b', border: '1px solid #27272a', borderRadius: '12px', padding: '24px', marginBottom: '24px' },
+  cardTitle: { fontSize: '16px', fontWeight: '600', marginBottom: '20px' },
+  mainPreview: { width: '100%', borderRadius: '8px', border: '1px solid #27272a' },
+  statRow: { display: 'flex', justifyContent: 'space-between', padding: '12px 0', borderBottom: '1px solid #18181b', fontSize: '14px' },
+  label: { color: '#a1a1aa' },
+  hashBox: { marginTop: '10px', background: '#18181b', padding: '12px', borderRadius: '6px', overflowX: 'auto' },
+  addressBox: { margin: '20px 0', padding: '16px', background: '#18181b', borderRadius: '8px' },
+  addressText: { fontSize: '14px', lineHeight: '1.5', marginTop: '8px', color: '#6366f1' },
+  elaCanvas: { width: '100%', borderRadius: '8px', background: '#000' },
+  rawJson: { background: '#000', padding: '20px', borderRadius: '8px', fontSize: '12px', color: '#10b981', overflowX: 'auto' },
+  emptyState: { height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#3f3f46' },
+  sidebarFooter: { marginTop: 'auto', paddingTop: '20px', borderTop: '1px solid #27272a' },
+  userBox: { display: 'flex', gap: '12px', alignItems: 'center' },
+  userAvatar: { width: '32px', height: '32px', background: '#6366f1', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold' },
+  logoutBtn: { background: 'none', border: 'none', color: '#ef4444', padding: 0, fontSize: '12px', cursor: 'pointer' },
+  primaryBtn: { background: '#fafafa', color: '#09090b', border: 'none', padding: '12px 24px', borderRadius: '8px', fontWeight: '600', cursor: 'pointer' },
+  secondaryBtn: { background: '#18181b', color: '#fafafa', border: '1px solid #27272a', padding: '8px 16px', borderRadius: '6px', fontSize: '14px', cursor: 'pointer' },
+  loginContainer: { height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#000' },
+  loginCard: { textAlign: 'center', padding: '48px', border: '1px solid #27272a', borderRadius: '16px', background: '#09090b' },
+  hint: { fontSize: '12px', color: '#71717a', marginTop: '12px' },
+  mapFrame: { borderRadius: '8px', border: '1px solid #27272a', marginTop: '16px' }
 };
